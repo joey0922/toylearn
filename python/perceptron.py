@@ -2,7 +2,6 @@
 # -*- encoding:utf-8 -*-
 
 import numpy as np
-from copy import deepcopy
 
 '''
 优点：简单、易于实现
