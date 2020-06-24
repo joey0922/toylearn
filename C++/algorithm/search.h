@@ -66,7 +66,6 @@ int fibSize(int n)
 	return size;
 }
 
-
 int fibonacciSearch(int arr[], int len, int target)
 {
 	if (arr == NULL || len == 0) {
