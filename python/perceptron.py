@@ -6,7 +6,7 @@ from copy import deepcopy
 
 '''
 优点：简单、易于实现
-缺点：有无数个解
+缺点：解不唯一
 '''
 
 
