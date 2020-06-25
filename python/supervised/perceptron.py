@@ -130,7 +130,7 @@ class Perceptron:
         w, b = self.__random_state, self.__random_state
 
         loop_index = 0
-        i, pos_i = 0, 0
+        i, posum = 0, 0
         while True:
             loop_index += 1
 
@@ -138,10 +138,10 @@ class Perceptron:
             if labels[idx] * ((w * train_set[idx]).sum() + b) <= 0:
                 w += self.__learning_rate * labels[idx] * train_set[idx]
                 b += self.__learning_rate * labels[idx]
-                pos_i = 0
+                posum = 0
             else:
-                pos_i += 1
-            if pos_i == length:
+                posum += 1
+            if posum == length:
                 break
 
             if loop_index == self.__max_iter:
@@ -163,19 +163,18 @@ class Perceptron:
         b = self.__random_state
 
         loop_index = 0
-        i, pos_i = 0, 0
+        i, posum = 0, 0
         while True:
             loop_index += 1
-            print(loop_index, alpha, b)
 
             idx = idx_list[i]
             if labels[idx] * (np.dot(alpha*labels, gram_matrix[:, idx]) + b) <= 0:
                 alpha[idx] += self.__learning_rate
                 b += self.__learning_rate * labels[idx]
-                pos_i = 0
+                posum = 0
             else:
-                pos_i += 1
-            if pos_i == length:
+                posum += 1
+            if posum == length:
                 break
 
             if loop_index == self.__max_iter:
