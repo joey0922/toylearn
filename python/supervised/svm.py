@@ -131,45 +131,69 @@ class Kernel(object):
         return (x * y.T / xym).A
 
 
+# 数据存储类
+class OptData:
+
+    def __init__(self, data_mat, labels, kernel_name, *,
+                 gamma=None, coef0=None, degree=None):
+
+        if type(data_mat) is not np.matrix:
+            data_mat = np.mat(data_mat)
+        if type(labels) is not np.matrix:
+            labels = np.mat(labels)
+        if labels.shape[1] != 1:
+            labels = labels.transpose()
+
+        self.data_mat = data_mat
+        self.labels = labels
+        self.n_rows = data_mat.shape[0]
+        self.error_cache = np.mat(np.zeros((self.n_rows, 2)))
+
+        self.kernel_name = kernel_name
+        self.gamma = gamma
+        self.coef0 = coef0
+        self.degree = degree
+        self.kernel_cache = np.mat(calc_kernel_matrix(self))
+
+
 # 计算核函数矩阵函数
-def calc_kernel_matrix(data_mat, config: dict):
+def calc_kernel_matrix(opt):
 
     params_dict = {'rbf': ('gamma',), 'poly': ('gamma', 'coef0', 'degree'),
                    'sigmoid': ('gamma', 'coef0'), 'laplacian': ('gamma',),
                    'chi2': ('gamma',)}
 
-    kernel_name = config.get('kernel', 'linear')
-    params = params_dict.get(kernel_name, None)
+    params = params_dict.get(opt.kernel_name, None)
     if params is not None:
-        params = {key: config.get(key, None) for key in params if config.get(key, None)}
+        params = {key: getattr(opt, key, None) for key in params if getattr(opt, key, None)}
 
     if params:
-        return getattr(Kernel(), kernel_name)(data_mat, **params)
+        return getattr(Kernel(), opt.kernel_name)(opt.data_mat, **params)
     else:
-        return getattr(Kernel(), kernel_name)(data_mat)
+        return getattr(Kernel(), opt.kernel_name)(opt.data_mat)
 
 
-#计算误差缓存E
-def calc_Ek(k, config, labels, kernel_mat):
+# 计算误差缓存E
+def calc_Ek(k, model, opt):
     '''
-    :param k: index of data to calculate E
-    :param config: dictionary of alphas and bias
-    :param labels: labels of data
-    :param kernel_mat: kernel value matrix
-    :return: E of data k
+    :param k: index of data
+    :param model: svm model
+    :param opt: OptData model
+    :return: error cache
     E = sum([alpha_i * y_i * K(x_i, x_k) for i in range(len(data)]) + b - y_k
     '''
 
-    fxk = float(config['alphas'].T.A * labels.T.A * kernel_mat[:, k]) + config['bias']
-    Ek = fxk - float(labels[k])
+    fxk = float(model.alphas.T.A * opt.labels.T.A * opt.kernel_cache[:, k]) + \
+          model.bias
+    Ek = fxk - float(opt.labels[k])
 
     return Ek
 
 
 # 更新误差缓存E
-def update_Ek(k, config, labels, kernel_mat, e_cache):
-    Ek = calc_Ek(k, config, labels, kernel_mat)
-    e_cache[k, 0], e_cache[k, 1] = 1, Ek
+def update_Ek(k, model, opt):
+    Ek = calc_Ek(k, model, opt)
+    opt.error_cache[k, 0], opt.error_cache[k, 1] = 1, Ek
 
 
 # 数值截断，使值在[low, high]范围内
@@ -194,78 +218,78 @@ def rand_select_index(i, high):
 
 
 # 选择内循环索引
-def select_index(i, Ei, e_cache, config, labels, kernel_mat):
-    e_cache[i, 0],  e_cache[i, 1] = 1, Ei
+def select_index(i, Ei, model, opt):
+    opt.error_cache[i, 0],  opt.error_cache[i, 1] = 1, Ei
 
     max_j, max_delta_ej, Ej = -1, 0, 0
-    valid_cache_list = np.nonzero(e_cache[:, 0].A)[0]
+    valid_cache_list = np.nonzero(opt.error_cache[:, 0].A)[0]
     if len(valid_cache_list) > 1:
         for k in valid_cache_list:
             if k == i: continue
-            Ek = calc_Ek(k, config, labels, kernel_mat)
+            Ek = calc_Ek(k, model, opt)
             delta_ek = np.abs(Ei - Ek)
             if delta_ek > max_delta_ej:
                 max_j = k
                 max_delta_ej = delta_ek
                 Ej = Ek
     else:
-        max_j = rand_select_index(i, labels.shape[0])
-        Ej = calc_Ek(max_j, config, labels, kernel_mat)
+        max_j = rand_select_index(i, opt.n_rows)
+        Ej = calc_Ek(max_j, model, opt)
 
     return max_j, Ej
 
 
 # 内层循环
-def inner_loop(i, config, labels, kernel_mat, e_cache):
-    Ei = calc_Ek(i, config, labels, kernel_mat)
+def inner_loop(i, model, opt):
+    Ei = calc_Ek(i, model, opt)
     # 违反KKT条件判断
-    if (labels[i] * Ei < -config['tol'] and config['alphas'][i] < config['C']) \
-        or (labels[i] * Ei > config['tol'] and config['alphas'][i] > 0):
+    if (opt.labels[i] * Ei < -model.tol and model.alphas[i] < model.C) \
+            or (opt.labels[i] * Ei > model.tol and model.alphas[i] > 0):
 
-        j, Ej = select_index(i, Ei, e_cache, config, labels, kernel_mat)
-        alpha_i_old, alpha_j_old = config['alphas'][i].copy(), config['alphas'][j].copy()
+        j, Ej = select_index(i, Ei, model, opt)
+        alpha_i_old, alpha_j_old = model.alphas[i].copy(), model.alphas[j].copy()
 
         # labels[i]==labels[j]时，alpha_i与alpha_j的和为常数；否则，alpha_i与alpha_j差为常数。
-        if labels[i] != labels[j]:
-            L = max(0, config['alphas'][j] - config['alphas'][i])
-            H = min(config['C'], config['C'] + config['alphas'][j] - config['alphas'][i])
+        if opt.labels[i] != opt.labels[j]:
+            L = max(0, model.alphas[j] - model.alphas[i])
+            H = min(model.C, model.C + model.alphas[j] - model.alphas[i])
         else:
-            L = max(0, config['alphas'][j] + config['alphas'][i] - config['C'])
-            H = min(config['C'],  config['alphas'][j] + config['alphas'][i])
+            L = max(0, model.alphas[j] + model.alphas[i] - model.C)
+            H = min(model.C,  model.alphas[j] + model.alphas[i])
         if L == H:
-            print("L == H")
+            # print("L == H")
             return 0
 
-        eta = 2.0 * kernel_mat[i, j] - kernel_mat[i, i] - kernel_mat[j, j]
+        eta = 2.0 * opt.kernel_cache[i, j] - opt.kernel_cache[i, i] - opt.kernel_cache[j, j]
         if eta >= 0:
-            print("eta >= 0")
+            # print("eta >= 0")
             return 0
 
         # 更新alpha j
-        config['alphas'][j] -= labels[j] * (Ei - Ej) / eta
-        config['alphas'][j] = clip(config['alphas'][j], L, H)
-        update_Ek(j, config, labels, kernel_mat, e_cache)
-        if np.abs(config['alphas'][j], alpha_j_old) < 1e-5:
-            print('Inner alpha not moving enough.')
+        model.alphas[j] -= opt.labels[j] * (Ei - Ej) / eta
+        model.alphas[j] = clip(model.alphas[j], L, H)
+        update_Ek(j, model, opt)
+        if np.abs(model.alphas[j], alpha_j_old) < 1e-5:
+            # print('Inner alpha not moving enough.')
             return 0
 
         # 更新alpha i
-        config['alphas'][i] += labels[i] * labels[j] * (alpha_j_old - config['alphas'][j])
-        update_Ek(i, config, labels, kernel_mat, e_cache)
+        model.alphas[i] += opt.labels[i] * opt.labels[j] * (alpha_j_old - model.alphas[j])
+        update_Ek(i, model, opt)
 
         # 更新bias
-        b1 = config['bias'] - Ei - labels[i] * (config['alphas'][i] - alpha_i_old) * \
-            kernel_mat[i, i] - labels[j] * (config['alphas'][j] - alpha_j_old) *\
-            kernel_mat[i, j]
-        b2 = config['bias'] - Ej - labels[i] * (config['alphas'][i] - alpha_i_old) * \
-            kernel_mat[i, j] - labels[j] * (config['alphas'][j] - alpha_j_old) *\
-            kernel_mat[j, j].T
-        if 0 < config['alphas'][i] < config['C']:
-            config['bias'] = b1
-        elif 0 < config['alphas'][j] < config['C']:
-            config['bias'] = b2
+        b1 = model.bias - Ei - opt.labels[i] * (model.alphas[i] - alpha_i_old) * \
+            opt.kernel_cache[i, i] - opt.labels[j] * (model.alphas[j] - alpha_j_old) *\
+            opt.kernel_cache[i, j]
+        b2 = model.bias - Ej - opt.labels[i] * (model.alphas[i] - alpha_i_old) * \
+            opt.kernel_cache[i, j] - opt.labels[j] * (model.alphas[j] - alpha_j_old) *\
+            opt.kernel_cache[j, j].T
+        if 0 < model.alphas[i] < model.C:
+            model.bias = b1
+        elif 0 < model.alphas[j] < model.C:
+            model.bias = b2
         else:
-            config['bias'] = (b1 + b2) / 2
+            model.bias = (b1 + b2) / 2
 
         return 1
     else:
@@ -273,42 +297,28 @@ def inner_loop(i, config, labels, kernel_mat, e_cache):
 
 
 # 序列最小优化算法(sequential minimal optimization)
-def SMO(data_mat, labels, config: dict):
+def SMO(model, opt):
 
-    if type(data_mat) is not np.matrix:
-        data_mat = np.mat(data_mat)
-    if type(labels) is not np.matrix:
-        labels = np.mat(labels)
-    if labels.shape[1] != 1:
-        labels = labels.transpose()
-
-    # 计算核函数矩阵
-    k_mat = np.mat(calc_kernel_matrix(data_mat, config))
-
-    n_rows, n_cols = data_mat.shape
-    config['alphas'] = np.mat(np.zeros((n_rows, 1)))
-    config['bias'] = 0
-    # E 缓存
-    e_cache = np.mat(np.zeros((n_rows, 2)))
+    model.alphas = np.mat(np.zeros((opt.n_rows, 1)))
+    model.bias = 0
 
     loop = 0
-    max_iter = config.get('max_iter', -1)
     entire_set = True
     alpha_pairs_changed = 0
-    while loop < max_iter and (alpha_pairs_changed > 0 or entire_set):
+    while loop < model.max_iter and (alpha_pairs_changed > 0 or entire_set):
         alpha_pairs_changed = 0
         if entire_set:
-            for i in range(n_rows):
-                alpha_pairs_changed += inner_loop(i, config, labels, k_mat, e_cache)
-                print(f'Full set, iter: {loop}, i: {i}, '
-                      f'{alpha_pairs_changed} pairs changed')
+            for i in range(opt.n_rows):
+                alpha_pairs_changed += inner_loop(i, model, opt)
+                # print(f'Full set, iter: {loop}, i: {i}, '
+                #       f'{alpha_pairs_changed} pairs changed')
         else:
-            non_bound_is = np.nonzero((config['alphas'] > 0).A *
-                                      (config['alphas'] < config['C']).A)[0]
+            non_bound_is = np.nonzero((model.alphas > 0).A *
+                                      (model.alphas < model.C).A)[0]
             for i in non_bound_is:
-                alpha_pairs_changed += inner_loop(i, config, labels, k_mat, e_cache)
-                print(f'non-bound, iter: {loop}, i: {i}, '
-                      f'{alpha_pairs_changed} pairs changed')
+                alpha_pairs_changed += inner_loop(i, model, opt)
+                # print(f'non-bound, iter: {loop}, i: {i}, '
+                #       f'{alpha_pairs_changed} pairs changed')
 
         loop += 1
         if entire_set:
@@ -316,7 +326,7 @@ def SMO(data_mat, labels, config: dict):
         elif alpha_pairs_changed == 0:
             entire_set = True
 
-        print(f'Iteration number: {loop}')
+        # print(f'Iteration number: {loop}')
 
 
 # 支持向量机
@@ -329,7 +339,7 @@ class SVC(object):
         self.max_iter = max_iter
         self.tol = tol
         self.gamma = gamma
-        self.cef0 = coef0
+        self.coef0 = coef0
         self.degree = degree
 
         self.kernel = kernel
@@ -342,8 +352,11 @@ class SVC(object):
         self.weights = None
 
     def fit(self, inps, labels):
-        config = self.__dict__
-        SMO(inps, labels, config)
+
+        opt = OptData(inps, labels, self.kernel,
+                      gamma=self.gamma, coef0=self.coef0, degree=self.degree)
+        SMO(self, opt)
+
         sup_idx = np.nonzero(self.alphas)[0]
         self.support_vectors = inps[sup_idx]
         self.n_support_ = self.support_vectors.shape[0]
@@ -370,19 +383,29 @@ class SVC(object):
 
         sign = (self.weights * np.mat(k_arr) + self.bias).A[0]
         
-        return sign
+        return sign / np.abs(sign)
 
     def save(self, path):
         return joblib.dump(self, path)
 
 
-# 支持向量回归
-class SVR:
-
-    def __init__(self):
-        pass
-
-
 if __name__ == '__main__':
 
-    model = SVC()
+    from sklearn.datasets import load_iris
+
+    def get_bi_iris():
+        iris = load_iris()
+        data = [(iris.data[i], l) for i, l in enumerate(iris.target) if l == 1 or l == 0]
+        np.random.shuffle(data)
+        X, y = list(zip(*data))
+
+        return np.array(X), np.array(y)
+
+
+    x, y = get_bi_iris()
+    y[y == 0] = -1
+
+    model = SVC(max_iter=10000)
+    model.fit(x, y)
+    print(model.predict(x))
+    print(all(model.predict(x)==y))
