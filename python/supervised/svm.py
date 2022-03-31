@@ -329,6 +329,41 @@ def SMO(model, opt):
         # print(f'Iteration number: {loop}')
 
 
+# P(1|f)的计算
+def sigmoid(a, b, f):
+    return 1 / (1 + np.exp(a*f + b))
+
+
+# 计算对应标签的概率
+def calc_label_proba(label, probability):
+    return label * ((label - 1) / 2 + probability)
+
+
+# 计算概率系数A，B
+def calc_proba_coef(decision_value_arr, alpha=1e-3, max_iter=1000):
+
+    target = decision_value_arr > 0
+    n_plus = decision_value_arr[decision_value_arr > 0].shape[0]
+    n_minus = decision_value_arr[decision_value_arr < 0].shape[0]
+
+    t_pos = (n_plus + 1) / (n_plus + 2)
+    t_neg = 1 / (n_minus + 2)
+
+    target = np.mat([t_pos if b else t_neg for b in target])
+    decision_value_arr = np.mat(decision_value_arr)
+
+    A = 0
+    B = np.log((n_minus + 1) / (n_plus + 1))
+    for _ in range(max_iter):
+        probas = sigmoid(A, B, decision_value_arr)
+        delta_a = float((target - probas) * decision_value_arr.T)
+        delta_b = (target - probas).sum()
+        A -= alpha * delta_a
+        B -= alpha * delta_b
+
+    return A, B
+
+
 # 支持向量机
 class SVC(object):
 
@@ -351,6 +386,12 @@ class SVC(object):
         self.support_labels = None
         self.weights = None
 
+        self.probability = True
+        self.proba_iter = 1000
+        self.proba_lambda = 1e-3
+        self.A = None
+        self.B = None
+
     def fit(self, inps, labels):
 
         opt = OptData(inps, labels, self.kernel,
@@ -365,7 +406,13 @@ class SVC(object):
         self.weights = np.mat(self.support_labels * self.alphas.T.A)
         self.bias = float(self.bias)
 
-    def predict(self, x, proba=False):
+        if self.probability:
+            decision_value_arr = self.calc_decision_value(inps)
+            self.A, self.B = calc_proba_coef(decision_value_arr,
+                                             self.proba_lambda,
+                                             self.proba_iter)
+
+    def calc_decision_value(self, x):
 
         params_dict = {'rbf': ('gamma',), 'poly': ('gamma', 'coef0', 'degree'),
                        'sigmoid': ('gamma', 'coef0'), 'laplacian': ('gamma',),
@@ -381,9 +428,26 @@ class SVC(object):
         else:
             k_arr = getattr(Kernel(), self.kernel)(self.support_vectors, x)
 
-        sign = (self.weights * np.mat(k_arr) + self.bias).A[0]
+        confidence = (self.weights * np.mat(k_arr) + self.bias).A[0]
         
-        return sign / np.abs(sign)
+        return confidence
+
+    def predict(self, x, out_proba=False):
+
+        confidence = self.calc_decision_value(x)
+        labels = confidence / np.abs(confidence)
+
+        if not out_proba:
+            return labels
+
+        if self.A is None or self.B is None:
+            raise ValueError('Not both of probability calculation coefficient are set!')
+        if not isinstance(self.A, (float, int)) or not isinstance(self.B, (float, int)):
+            raise ValueError('At least one of probability coefficient is not numeric!')
+
+        label_proba = calc_label_proba(labels, sigmoid(self.A, self.B, confidence))
+        label_proba = np.array(list(zip(labels, label_proba)))
+        return label_proba
 
     def save(self, path):
         return joblib.dump(self, path)
@@ -407,5 +471,4 @@ if __name__ == '__main__':
 
     model = SVC(max_iter=10000)
     model.fit(x, y)
-    print(model.predict(x))
-    print(all(model.predict(x)==y))
+    print(model.predict(x, out_proba=True))
