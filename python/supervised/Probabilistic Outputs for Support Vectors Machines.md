@@ -36,5 +36,5 @@ The two papers below proposes two different ways to optimize parameters A and B.
 
 # References
 
-- [Probabilistic Outputs for Support Vector Machines and Comparisons to Regularized Likelihood Methods](F:\toylearn\python\supervised\references\Probabilistic Outputs for Support Vector Machines and Comparisons to Regularized Likelihood Methods)
-- [A Note on Platt’s Probabilistic Outputs for Support Vector Machines](F:\toylearn\python\supervised\references\A Note on Platt’s Probabilistic Outputs for Support Vector Machines)
+- Probabilistic Outputs for Support Vector Machines and Comparisons to Regularized Likelihood Methods
+- A Note on Platt’s Probabilistic Outputs for Support Vector Machines
